@@ -1,148 +1,54 @@
 package poe
 
-import (
-	"fmt"
-	"maps"
-	"math"
-	"slices"
-)
+import "slices"
 
 type X = map[string]float64
-type Optimizer struct {
-	x     X
-	space Space
+type ObjectiveFunc = func(X) float64
+
+type Poe struct {
+	Objective ObjectiveFunc
+	Trials    Trials
 }
 
 // initializer
-func New(space Space) *Optimizer {
-	return &Optimizer{
-		x:     RandomSample(space),
-		space: space,
+func New(f ObjectiveFunc) *Poe {
+	return &Poe{
+		Objective: f,
+		Trials:    Trials{},
 	}
-}
-
-// setter
-func (opt *Optimizer) Set(k string, v float64) *Optimizer {
-	if _, ok := opt.x[k]; ok {
-		if bounds, ok := opt.space[k]; ok {
-			opt.x[k] = bounds.Clip(v)
-		} else {
-			opt.x[k] = v
-		}
-	}
-
-	return opt
 }
 
 // getter
-func (opt *Optimizer) X() X {
-	x := make(X, len(opt.x))
-	maps.Copy(x, opt.x)
+func (poe *Poe) X() X {
+	if len(poe.Trials) == 0 {
+		return X{}
+	}
 
-	return x
+	return poe.Trials[0].Input
 }
 
-// optimizers
-type Observation struct {
-	Input  X
-	Output float64
+// optimization
+type Sampler interface { Sample(Trials) X }
+
+func (poe *Poe) Optimize(direction int, sampler Sampler, numTrials int) *Poe {
+	// re-sort in case optimization direction is different than it was before
+	slices.SortFunc(poe.Trials, func(a, b *Trial) int {
+		return -direction * a.Compare(b)
+	})
+
+	// run trials
+	for _ = range numTrials {
+		trial := NewTrial(poe.Objective, sampler.Sample(poe.Trials))
+		poe.Trials = poe.Trials.Insert(trial, direction)
+	}
+
+	return poe
 }
 
-func (a *Observation) Compare(b *Observation) int {
-	if a.Output < b.Output {
-		return -1
-	} else if a.Output > b.Output {
-		return 1
-	} else {
-		return 0
-	}
+func (poe *Poe) Minimize(sampler Sampler, numTrials int) *Poe {
+	return poe.Optimize(-1, sampler, numTrials)
 }
 
-type ObjectiveFunc = func(X) float64
-type SamplerFunc = func(Space) X
-
-func (opt *Optimizer) TPEMinimize(
-	f ObjectiveFunc,
-	numCandidates int,
-	numEpochs int,
-	gamma float64,
-) *Optimizer {
-	if numCandidates <= 0 {
-		return opt
-	}
-
-	observations := make([]*Observation, 0, numCandidates+numEpochs)
-
-	for _ = range numCandidates {
-		x := RandomSample(opt.space)
-		observations = append(observations, &Observation{
-			Input:  x,
-			Output: f(x),
-		})
-	}
-
-	bestY := f(opt.x)
-
-	for _ = range numEpochs {
-		// split observations with gamma
-		slices.SortFunc(observations, func(a, b *Observation) int {
-			return a.Compare(b)
-		})
-
-		// splitIndex := max(int(gamma * float64(len(observations))), 1)
-		splitIndex := min(10, len(observations))
-		good := observations[:splitIndex]
-		bad := observations[splitIndex:]
-
-		if good[0].Output < bestY {
-			bestY = good[0].Output
-			opt.x = good[0].Input
-		}
-
-		// infer bandwidths per dimension
-		goodBandwidth := make(map[string]float64, len(opt.space))
-		// badBandwidth := make(map[string]float64, len(opt.space))
-		for k, bounds := range opt.space {
-			width := bounds.Max - bounds.Min
-			goodBandwidth[k] = width / float64(min(max(len(observations), 10), 100))
-			// goodBandwidth[k] = width / float64(min(max(len(good), 10), 100))
-			// badBandwidth[k] = width / float64(min(max(len(bad), 10), 100))
-		}
-
-		// sample and evaluate candidates with p(l)/p(g)
-		bestSample := X{}
-		bestScore := math.Inf(-1)
-		for _ = range numCandidates {
-			sample := make(X, len(opt.space))
-			score := 1.
-			for k, bounds := range opt.space {
-				sample[k] = bounds.Clip(kdeSample(goodBandwidth[k], good, k))
-
-				pGood := kdePDF(sample[k], goodBandwidth[k], good, k)
-				pBad := kdePDF(sample[k], goodBandwidth[k], bad, k)
-
-				score *= pGood / (pBad + 1e-12)
-			}
-
-			if score > bestScore {
-				bestScore = score
-				bestSample = sample
-			}
-		}
-
-		y := f(bestSample)
-		if y < bestY {
-			bestY = y
-			opt.x = bestSample
-		}
-
-		fmt.Println(y)
-
-		observations = append(observations, &Observation{
-			Input:  bestSample,
-			Output: y,
-		})
-	}
-
-	return opt
+func (poe *Poe) Maximize(sampler Sampler, numTrials int) *Poe {
+	return poe.Optimize(1, sampler, numTrials)
 }
