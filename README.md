@@ -1,6 +1,6 @@
 # POe
 
-<ins>P</ins>arameter <ins>O</ins>ptimization in Go for non-differentiable and costly-to-run objective functions.
+<ins>**P**</ins>arameter <ins>**O**</ins>ptimization in Go for non-differentiable and costly-to-run objective functions.
 
 Available:
 
