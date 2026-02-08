@@ -1,6 +1,11 @@
-# poe
+# POe
 
-**P**arameter **O**ptimization in Go for *non-differentiable* and *costly-to-run* objective functions.
+<u>P</u>arameter <u>O</u>ptimization in Go for non-differentiable and costly-to-run objective functions.
+
+Available:
+
+- Random search
+- Tree-structured Parzen Estimator (TPE)
 
 ## example
 
