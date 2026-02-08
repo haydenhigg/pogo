@@ -1,15 +1,15 @@
 package pogo
 
 import (
+	"fmt"
 	"maps"
 	"math"
 	"slices"
-	"fmt"
 )
 
 type X = map[string]float64
 type Optimizer struct {
-	x X
+	x     X
 	space Space
 }
 
@@ -71,12 +71,12 @@ func (opt *Optimizer) TPEMinimize(
 		return opt
 	}
 
-	observations := make([]*Observation, 0, numCandidates + numEpochs)
+	observations := make([]*Observation, 0, numCandidates+numEpochs)
 
 	for _ = range numCandidates {
 		x := RandomSample(opt.space)
 		observations = append(observations, &Observation{
-			Input: x,
+			Input:  x,
 			Output: f(x),
 		})
 	}
@@ -109,6 +109,7 @@ func (opt *Optimizer) TPEMinimize(
 			// badBandwidth[k] = width / float64(min(max(len(bad), 10), 100))
 		}
 
+		// sample and evaluate candidates with p(l)/p(g)
 		bestSample := X{}
 		bestScore := math.Inf(-1)
 		for _ = range numCandidates {
@@ -138,7 +139,7 @@ func (opt *Optimizer) TPEMinimize(
 		fmt.Println(y)
 
 		observations = append(observations, &Observation{
-			Input: bestSample,
+			Input:  bestSample,
 			Output: y,
 		})
 	}
