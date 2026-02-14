@@ -6,9 +6,10 @@ import (
 )
 
 type TPESampler struct {
-	space         Space
-	Quantile      float64
-	NumCandidates int
+	space              Space
+	Quantile           float64
+	NumCandidates      int
+	MinBandwidthFactor float64
 }
 
 func NewTPESampler(
@@ -20,6 +21,7 @@ func NewTPESampler(
 		space:         space,
 		Quantile:      quantile,
 		NumCandidates: max(numCandidates, 2),
+		MinBandwidthFactor: 0.01,
 	}
 }
 
@@ -44,45 +46,21 @@ func kdePDF(x, sigma float64, trials Trials, k string) float64 {
 		sum += normPDF(x, observation.Input[k], sigma)
 	}
 
-	return sum / float64(len(trials))
+	return sum / trials.N()
 }
 
 func kdeSample(sigma float64, trials Trials, k string) float64 {
 	return rand.NormFloat64()*sigma + trials[rand.Intn(len(trials))].Input[k]
 }
 
-func inferBinWidthSimple(domain *Domain, trials Trials) float64 {
-	// bins := min(max(float64(len(trials)), 10), 100)
-	bins := min(max(math.Log(float64(len(trials))), 10), 100)
-	return (domain.Max - domain.Min) / bins
+func optuna4Bandwidth(domain *Domain, trials Trials, d int) float64 {
+	quintile := (domain.Max - domain.Min) / 5
+	return quintile * math.Pow(trials.N(), -1/(float64(d)+4))
 }
 
-// Infer bin width using Scott's rule. **This doesn't work!**
-func inferBinWidth(domain *Domain, trials Trials, k string) float64 {
-	if len(trials) <= 1 {
-		return (domain.Max - domain.Min) / 10
-	}
-
-	sum := 0.
-	for _, trial := range trials {
-		sum += trial.Input[k]
-	}
-
-	n := float64(len(trials))
-	mean := sum / n
-
-	variance := 0.
-	for _, trial := range trials {
-		d := trial.Input[k] - mean
-		variance += d * d
-	}
-
-	stdDev := math.Sqrt(variance / (n - 1))
-
-	domainWidth := domain.Max - domain.Min
-	binWidthDomain := NewDomain([2]float64{domainWidth / 1000, domainWidth / 4})
-
-	return binWidthDomain.Clip(1.06 * stdDev * math.Pow(n, -0.2))
+// "magic" clipping
+func minBandwidth(domain *Domain, trials Trials) float64 {
+	return (domain.Max - domain.Min) / min(100, trials.N())
 }
 
 func (sampler *TPESampler) Sample(trials Trials) X {
@@ -94,13 +72,14 @@ func (sampler *TPESampler) Sample(trials Trials) X {
 	good, bad := trials.Bisected(sampler.Quantile)
 
 	// infer bandwidths
-	goodBandwidths := make(map[string]float64, len(sampler.space))
-	badBandwidths := make(map[string]float64, len(sampler.space))
+	d := len(sampler.space)
+	goodBandwidths := make(map[string]float64, d)
+	badBandwidths := make(map[string]float64,d)
+
 	for k, domain := range sampler.space {
-		// goodBandwidths[k] = inferBinWidth(domain, good, k)
-		// badBandwidths[k] = inferBinWidth(domain, bad, k)
-		goodBandwidths[k] = inferBinWidthSimple(domain, good)
-		badBandwidths[k] = inferBinWidthSimple(domain, bad)
+		minimum := minBandwidth(domain, trials)
+		goodBandwidths[k] = max(optuna4Bandwidth(domain, good, d), minimum)
+		badBandwidths[k] = max(optuna4Bandwidth(domain, bad, d), minimum)
 	}
 
 	// sample and evaluate candidates
@@ -108,7 +87,7 @@ func (sampler *TPESampler) Sample(trials Trials) X {
 	bestScore := math.Inf(-1)
 
 	for _ = range sampler.NumCandidates {
-		sample := make(X, len(sampler.space))
+		sample := make(X, d)
 		score := 1.
 
 		for k, domain := range sampler.space {

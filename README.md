@@ -77,6 +77,7 @@ func (a *Trial) Compare(b *Trial) int
 // Trials
 type Trials []*Trial
 
+func (trials Trials) N() float64
 func (trials Trials) Insert(trial *Trial, direction int) Trials // inserts sorted
 func (trials Trials) Bisected(quantile float64) (Trials, Trials)
 ```

@@ -23,6 +23,10 @@ func (a *Trial) Compare(b *Trial) int {
 
 type Trials []*Trial
 
+func (trials Trials) N() float64 {
+	return float64(len(trials))
+}
+
 func (trials Trials) Insert(trial *Trial, direction int) Trials {
 	low, high := 0, len(trials)
 	for low < high {
@@ -42,7 +46,7 @@ func (trials Trials) Bisected(quantile float64) (Trials, Trials) {
 		return trials, Trials{}
 	}
 
-	index := max(int(float64(len(trials)) * quantile), 1)
+	index := max(int(trials.N() * quantile), 1)
 
 	return trials[:index], trials[index:]
 }
