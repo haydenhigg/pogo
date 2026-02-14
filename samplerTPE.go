@@ -9,7 +9,6 @@ type TPESampler struct {
 	space              Space
 	Quantile           float64
 	NumCandidates      int
-	MinBandwidthFactor float64
 }
 
 func NewTPESampler(
@@ -21,7 +20,6 @@ func NewTPESampler(
 		space:         space,
 		Quantile:      quantile,
 		NumCandidates: max(numCandidates, 2),
-		MinBandwidthFactor: 0.01,
 	}
 }
 
@@ -49,47 +47,8 @@ func kdePDF(x, sigma float64, trials Trials, k string) float64 {
 	return sum / trials.N()
 }
 
-func hyperoptSigma(i int, trials Trials, k string) float64 {
-	n := len(trials)
-	if n < 2 {
-		return 0
-	}
-
-	up := math.Inf(-1)
-	if i < n-1 {
-		up = trials[i+1].Input[k] - trials[i].Input[k]
-	}
-
-	down := math.Inf(-1)
-	if i >= 1 {
-		down = trials[i].Input[k] - trials[i-1].Input[k]
-	}
-
-	return max(up, down)
-}
-
-func kdePDFAdaptive(x float64, trials Trials, k string) float64 {
-	if len(trials) < 2 {
-		return 0
-	}
-
-	sum := 0.
-	for i, trial := range trials {
-		sigma := hyperoptSigma(i, trials, k)
-		sum += normPDF(x, trial.Input[k], sigma)
-	}
-
-	return sum / trials.N()
-}
-
 func kdeSample(sigma float64, trials Trials, k string) float64 {
 	return rand.NormFloat64()*sigma + trials[rand.Intn(len(trials))].Input[k]
-}
-
-func kdeSampleAdaptive(trials Trials, k string) float64 {
-	i := rand.Intn(len(trials))
-	sigma := hyperoptSigma(i, trials, k)
-	return rand.NormFloat64()*sigma + trials[i].Input[k]
 }
 
 func optuna4Bandwidth(domain *Domain, trials Trials, d int) float64 {
@@ -110,16 +69,16 @@ func (sampler *TPESampler) Sample(trials Trials) X {
 	// split trial with gamma
 	good, bad := trials.Bisected(sampler.Quantile)
 
-	// // infer bandwidths
-	// d := len(sampler.space)
-	// goodBandwidths := make(map[string]float64, d)
-	// badBandwidths := make(map[string]float64,d)
+	// infer bandwidths
+	d := len(sampler.space)
+	goodBandwidths := make(map[string]float64, d)
+	badBandwidths := make(map[string]float64,d)
 
-	// for k, domain := range sampler.space {
-	// 	minimum := minBandwidth(domain, trials)
-	// 	goodBandwidths[k] = max(optuna4Bandwidth(domain, good, d), minimum)
-	// 	badBandwidths[k] = max(optuna4Bandwidth(domain, bad, d), minimum)
-	// }
+	for k, domain := range sampler.space {
+		minimum := minBandwidth(domain, trials)
+		goodBandwidths[k] = max(optuna4Bandwidth(domain, good, d), minimum)
+		badBandwidths[k] = max(optuna4Bandwidth(domain, bad, d), minimum)
+	}
 
 	// sample and evaluate candidates
 	bestX := X{}
@@ -130,10 +89,10 @@ func (sampler *TPESampler) Sample(trials Trials) X {
 		score := 1.
 
 		for k, domain := range sampler.space {
-			sample[k] = domain.Clip(kdeSampleAdaptive(good, k))
+			sample[k] = domain.Clip(kdeSample(goodBandwidths[k], good, k))
 
-			pGood := kdePDFAdaptive(sample[k], good, k)
-			pBad := kdePDFAdaptive(sample[k], bad, k)
+			pGood := kdePDF(sample[k], goodBandwidths[k], good, k)
+			pBad := kdePDF(sample[k], badBandwidths[k], bad, k)
 
 			score *= pGood / (pBad + 1e-12)
 		}
