@@ -13,6 +13,14 @@ func (domain *Domain) Clip(v float64) float64 {
 	return min(max(v, domain.Min), domain.Max)
 }
 
+func (domain *Domain) Width() float64 {
+	return domain.Max - domain.Min
+}
+
+func (domain *Domain) Midpoint() float64 {
+	return (domain.Min + domain.Max) / 2
+}
+
 type Bounds = map[string][2]float64
 type Space map[string]*Domain
 

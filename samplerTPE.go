@@ -34,52 +34,54 @@ func normPDF(x, mu, sigma float64) float64 {
 	return num / den
 }
 
-func priorGaussian(domain *Domain) (float64, float64) {
-	return (domain.Min + domain.Max) / 2, domain.Max - domain.Min
-}
-
-func kdePDFWithPrior(x float64, domain *Domain, sigma float64, trials Trials, k string) float64 {
-	// Prior is always present; if there are no trials, we fall back to pure prior.
-	// Weight follows canonical TPE: 1/(n+1) prior, n/(n+1) empirical.
+func (sampler *TPESampler) kdePDF(
+	x float64,
+	trials Trials,
+	k string,
+	sigma float64,
+) float64 {
 	n := trials.N()
-	priorMu, priorSigma := priorGaussian(domain)
-	pPrior := normPDF(x, priorMu, priorSigma)
+	pPrior := normPDF(x, sampler.space[k].Midpoint(), sampler.space[k].Width())
 
+	// if there are no trials, use prior only
 	if n == 0 {
 		return pPrior
 	}
 
-	sum := 0.
+	// calculate empirical probability
+	pEmpSum := 0.
 	for _, trial := range trials {
-		sum += normPDF(x, trial.Input[k], sigma)
+		pEmpSum += normPDF(x, trial.Input[k], sigma)
 	}
-	pEmp := sum / n
 
-	wPrior := 1.0 / (n + 1.0)
-	wEmp := 1.0 - wPrior
+	wPrior := 1 / (n + 1)
+	wEmp := 1 - wPrior
 
-	return wEmp*pEmp + wPrior*pPrior
+	return pPrior*wPrior + (pEmpSum / n)*wEmp
 }
 
-func kdeSampleWithPrior(domain *Domain, sigma float64, trials Trials, k string) float64 {
+func (sampler *TPESampler) kdeSample(
+	trials Trials,
+	k string,
+	sigma float64,
+) float64 {
 	n := trials.N()
+	r := rand.NormFloat64()
 
 	if n == 0 || rand.Float64() < 1 / (n + 1) {
-		priorMu, priorSigma := priorGaussian(domain)
-		return rand.NormFloat64()*priorSigma + priorMu
+		return r*sampler.space[k].Width() + sampler.space[k].Midpoint()
 	}
 
-	return rand.NormFloat64()*sigma + trials[rand.Intn(len(trials))].Input[k]
+	return r*sigma + trials[rand.Intn(len(trials))].Input[k]
 }
 
 func optuna4Bandwidth(domain *Domain, trials Trials, d int) float64 {
-	quintile := (domain.Max - domain.Min) / 5
-	return quintile * math.Pow(trials.N(), -1/(float64(d)+4))
+	return (domain.Width() / 5) * math.Pow(trials.N(), -1/(float64(d)+4))
 }
 
 // "magic" clipping
 func minBandwidth(domain *Domain, trials Trials) float64 {
-	return (domain.Max - domain.Min) / min(100, trials.N())
+	return domain.Width() / min(100, trials.N())
 }
 
 func (sampler *TPESampler) Sample(trials Trials) X {
@@ -92,13 +94,14 @@ func (sampler *TPESampler) Sample(trials Trials) X {
 
 	// infer bandwidths
 	d := len(sampler.space)
-	goodBandwidths := make(map[string]float64, d)
-	badBandwidths := make(map[string]float64, d)
+
+	goodSigma := make(map[string]float64, d)
+	badSigma := make(map[string]float64, d)
 
 	for k, domain := range sampler.space {
 		minimum := minBandwidth(domain, trials)
-		goodBandwidths[k] = max(optuna4Bandwidth(domain, good, d), minimum)
-		badBandwidths[k] = max(optuna4Bandwidth(domain, bad, d), minimum)
+		goodSigma[k] = max(optuna4Bandwidth(domain, good, d), minimum)
+		badSigma[k] = max(optuna4Bandwidth(domain, bad, d), minimum)
 	}
 
 	// sample and evaluate candidates
@@ -110,10 +113,10 @@ func (sampler *TPESampler) Sample(trials Trials) X {
 		score := 1.
 
 		for k, domain := range sampler.space {
-			sample[k] = domain.Clip(kdeSampleWithPrior(domain, goodBandwidths[k], good, k))
+			sample[k] = domain.Clip(sampler.kdeSample(good, k, goodSigma[k]))
 
-			pGood := kdePDFWithPrior(sample[k], domain, goodBandwidths[k], good, k)
-			pBad := kdePDFWithPrior(sample[k], domain, badBandwidths[k], bad, k)
+			pGood := sampler.kdePDF(sample[k], good, k, goodSigma[k])
+			pBad := sampler.kdePDF(sample[k], bad, k, badSigma[k])
 
 			score *= pGood / (pBad + 1e-12)
 		}
