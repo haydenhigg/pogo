@@ -34,20 +34,41 @@ func normPDF(x, mu, sigma float64) float64 {
 	return num / den
 }
 
-func kdePDF(x, sigma float64, trials Trials, k string) float64 {
-	if len(trials) == 0 {
-		return 0
+func priorGaussian(domain *Domain) (float64, float64) {
+	return (domain.Min + domain.Max) / 2, domain.Max - domain.Min
+}
+
+func kdePDFWithPrior(x float64, domain *Domain, sigma float64, trials Trials, k string) float64 {
+	// Prior is always present; if there are no trials, we fall back to pure prior.
+	// Weight follows canonical TPE: 1/(n+1) prior, n/(n+1) empirical.
+	n := trials.N()
+	priorMu, priorSigma := priorGaussian(domain)
+	pPrior := normPDF(x, priorMu, priorSigma)
+
+	if n == 0 {
+		return pPrior
 	}
 
 	sum := 0.
 	for _, trial := range trials {
 		sum += normPDF(x, trial.Input[k], sigma)
 	}
+	pEmp := sum / n
 
-	return sum / trials.N()
+	wPrior := 1.0 / (n + 1.0)
+	wEmp := 1.0 - wPrior
+
+	return wEmp*pEmp + wPrior*pPrior
 }
 
-func kdeSample(sigma float64, trials Trials, k string) float64 {
+func kdeSampleWithPrior(domain *Domain, sigma float64, trials Trials, k string) float64 {
+	n := trials.N()
+
+	if n == 0 || rand.Float64() < 1 / (n + 1) {
+		priorMu, priorSigma := priorGaussian(domain)
+		return rand.NormFloat64()*priorSigma + priorMu
+	}
+
 	return rand.NormFloat64()*sigma + trials[rand.Intn(len(trials))].Input[k]
 }
 
@@ -58,7 +79,7 @@ func optuna4Bandwidth(domain *Domain, trials Trials, d int) float64 {
 
 // "magic" clipping
 func minBandwidth(domain *Domain, trials Trials) float64 {
-	return (domain.Max - domain.Min) / min(5, trials.N())
+	return (domain.Max - domain.Min) / min(100, trials.N())
 }
 
 func (sampler *TPESampler) Sample(trials Trials) X {
@@ -89,10 +110,10 @@ func (sampler *TPESampler) Sample(trials Trials) X {
 		score := 1.
 
 		for k, domain := range sampler.space {
-			sample[k] = domain.Clip(kdeSample(goodBandwidths[k], good, k))
+			sample[k] = domain.Clip(kdeSampleWithPrior(domain, goodBandwidths[k], good, k))
 
-			pGood := kdePDF(sample[k], goodBandwidths[k], good, k)
-			pBad := kdePDF(sample[k], badBandwidths[k], bad, k)
+			pGood := kdePDFWithPrior(sample[k], domain, goodBandwidths[k], good, k)
+			pBad := kdePDFWithPrior(sample[k], domain, badBandwidths[k], bad, k)
 
 			score *= pGood / (pBad + 1e-12)
 		}
